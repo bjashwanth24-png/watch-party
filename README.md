@@ -9,6 +9,7 @@ A Next.js watch-party MVP with real-time video/audio and screen sharing powered 
 3. Copy `.env.example` to `.env.local` and fill in the values below.
 4. Configure the Supabase Storage bucket as described below.
 5. Start with `npm run dev`, then open `http://localhost:3000`.
+6. Check the code with `npm run lint` and `npm run build`.
 
 ## Environment variables
 
