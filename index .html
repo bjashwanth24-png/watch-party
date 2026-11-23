@@ -1,0 +1,1259 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CineSync P2P — Watch Party, Video Call & File Share</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
+    <script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    fontFamily: { sans: ["Inter", "sans-serif"] },
+                    colors: {
+                        cinema: {
+                            950: "#06070a",
+                            900: "#0c0f17",
+                            800: "#141926",
+                            700: "#1e2538",
+                            accent: "#6366f1",
+                            glow: "#818cf8"
+                        }
+                    }
+                }
+            }
+        };
+    </script>
+
+    <style>
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #0c0f17; }
+        ::-webkit-scrollbar-thumb { background: #263047; border-radius: 9999px; }
+        ::-webkit-scrollbar-thumb:hover { background: #3b4a6b; }
+
+        @keyframes floatUp {
+            0% { transform: translateY(0) scale(.7); opacity: 0; }
+            15% { opacity: 1; transform: translateY(-25px) scale(1.2) rotate(-8deg); }
+            50% { transform: translateY(-115px) scale(1) rotate(8deg); }
+            100% { transform: translateY(-250px) scale(.85) rotate(-5deg); opacity: 0; }
+        }
+
+        .floating-emoji {
+            position: absolute;
+            bottom: 24px;
+            pointer-events: none;
+            animation: floatUp 2.6s cubic-bezier(.22, 1, .36, 1) forwards;
+            filter: drop-shadow(0 4px 12px rgba(0, 0, 0, .65));
+            z-index: 40;
+        }
+
+        input[type=range] {
+            -webkit-appearance: none;
+            appearance: none;
+            background: transparent;
+        }
+
+        input[type=range]::-webkit-slider-runnable-track {
+            height: 5px;
+            border-radius: 999px;
+            background: rgba(255,255,255,.22);
+        }
+
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 14px;
+            width: 14px;
+            border-radius: 50%;
+            background: #818cf8;
+            cursor: pointer;
+            margin-top: -4.5px;
+            box-shadow: 0 0 10px rgba(99,102,241,.85);
+        }
+
+        .mirror-video { transform: scaleX(-1); }
+    </style>
+</head>
+
+<body class="bg-cinema-950 text-slate-100 font-sans antialiased min-h-screen flex flex-col overflow-x-hidden selection:bg-indigo-500 selection:text-white">
+
+<div id="toast-container" class="fixed top-20 right-4 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+<header class="bg-cinema-900/95 backdrop-blur-md border-b border-slate-800/80 sticky top-0 z-30 px-3 sm:px-5 py-2.5">
+    <div class="max-w-[1850px] mx-auto flex flex-wrap items-center justify-between gap-2.5">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 via-purple-600 to-pink-500 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+                <i class="fa-solid fa-film text-white text-lg"></i>
+            </div>
+
+            <div>
+                <div class="flex items-center gap-2 flex-wrap">
+                    <h1 class="font-bold text-base sm:text-lg tracking-tight text-white">
+                        CineSync <span class="text-indigo-400">P2P</span>
+                    </h1>
+                    <span id="connection-badge" class="px-2.5 py-0.5 text-[11px] font-semibold rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 flex items-center gap-1.5">
+                        <span id="connection-dot" class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+                        <span id="connection-text">Initializing P2P...</span>
+                    </span>
+                </div>
+                <p class="text-[11px] text-slate-400 hidden sm:block">
+                    100% Serverless WebRTC • Watch, Call, Share Screen & Files
+                </p>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-2 flex-wrap">
+            <div class="flex items-center bg-cinema-800 border border-slate-700/70 rounded-xl px-2.5 py-1.5">
+                <i class="fa-regular fa-user text-indigo-400 text-xs mr-1.5"></i>
+                <input type="text" id="username-input" value="Host" maxlength="16"
+                       onchange="updateUsername()" class="bg-transparent text-xs font-medium text-white w-20 sm:w-24 focus:outline-none"
+                       title="Your Display Name">
+            </div>
+
+            <div class="flex items-center bg-cinema-800 border border-slate-700/70 rounded-xl p-1 pl-3">
+                <span class="text-[11px] text-slate-400 mr-1.5 hidden md:inline">Room:</span>
+                <code id="room-id-display" class="text-xs font-mono font-bold text-indigo-400 tracking-wider mr-2">...</code>
+                <button onclick="copyInviteLink()" class="bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 shadow-sm">
+                    <i class="fa-solid fa-link"></i>
+                    <span>Copy Invite Link</span>
+                </button>
+            </div>
+
+            <button onclick="toggleJoinModal(true)" class="bg-cinema-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-medium px-3 py-2 rounded-xl transition flex items-center gap-1.5"
+                    title="Join an existing Room ID">
+                <i class="fa-solid fa-right-to-bracket text-emerald-400"></i>
+                <span class="hidden sm:inline">Join Room</span>
+            </button>
+        </div>
+    </div>
+</header>
+
+<div id="quickstart-banner" class="bg-gradient-to-r from-indigo-950/90 via-purple-950/80 to-cinema-900 border-b border-indigo-500/30 px-4 py-2 text-xs text-indigo-100">
+    <div class="max-w-[1850px] mx-auto flex items-center justify-between gap-3">
+        <div class="flex items-center gap-2 flex-wrap">
+            <span class="bg-indigo-500/30 text-indigo-300 font-bold px-2 py-0.5 rounded-md text-[10px] uppercase tracking-wider">Zero Setup</span>
+            <span>Click <strong>Copy Invite Link</strong> and send the URL to friends.</span>
+        </div>
+        <button onclick="document.getElementById('quickstart-banner').remove()" class="text-indigo-300 hover:text-white p-1" title="Dismiss">
+            <i class="fa-solid fa-xmark"></i>
+        </button>
+    </div>
+</div>
+
+<main class="flex-1 max-w-[1850px] w-full mx-auto p-3 sm:p-4 grid grid-cols-1 lg:grid-cols-12 gap-4">
+    <div class="lg:col-span-8 xl:col-span-9 flex flex-col gap-3.5">
+        <div class="bg-cinema-900 border border-slate-800/90 rounded-2xl p-3 flex flex-wrap items-center justify-between gap-2.5 shadow-xl">
+            <div class="flex flex-wrap items-center gap-2">
+                <button id="btn-screenshare" onclick="startScreenShare()" class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-xs sm:text-sm font-semibold px-3.5 py-2 rounded-xl transition flex items-center gap-2 shadow-md">
+                    <i class="fa-solid fa-display"></i>
+                    <span>Share Screen / Tab</span>
+                </button>
+
+                <label class="cursor-pointer bg-cinema-800 hover:bg-slate-700/80 border border-slate-700 text-slate-200 text-xs sm:text-sm font-medium px-3.5 py-2 rounded-xl transition flex items-center gap-2">
+                    <i class="fa-solid fa-film text-amber-400"></i>
+                    <span>Stream Local Movie</span>
+                    <input type="file" id="local-movie-input" accept="video/*,.mkv" class="hidden" onchange="handleLocalMovieSelect(event)">
+                </label>
+
+                <button onclick="toggleUrlBar()" class="bg-cinema-800 hover:bg-slate-700/80 border border-slate-700 text-slate-200 text-xs sm:text-sm font-medium px-3.5 py-2 rounded-xl transition flex items-center gap-2">
+                    <i class="fa-solid fa-globe text-sky-400"></i>
+                    <span>Direct Video URL</span>
+                </button>
+            </div>
+
+            <span id="peer-count-pill" class="px-3 py-1.5 rounded-xl bg-cinema-800 border border-slate-700/70 text-xs font-medium text-slate-300 flex items-center gap-1.5">
+                <i class="fa-solid fa-users text-indigo-400"></i>
+                <span id="peer-count-text">1 in Room</span>
+            </span>
+        </div>
+
+        <div id="url-input-bar" class="hidden bg-cinema-900 border border-indigo-500/40 rounded-2xl p-3 flex flex-col sm:flex-row gap-2 shadow-lg">
+            <input type="url" id="video-url-field" placeholder="Paste direct .mp4 / .webm link..."
+                   class="flex-1 bg-cinema-950 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+            <div class="flex gap-2">
+                <button onclick="loadDirectUrl(true)" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-4 py-2 rounded-xl transition">Sync & Play</button>
+                <button onclick="loadSampleMovie(true)" class="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium px-3 py-2 rounded-xl transition">Sample Movie</button>
+            </div>
+        </div>
+
+        <div id="theater-wrapper" class="relative bg-black rounded-2xl overflow-hidden border border-slate-800 shadow-2xl aspect-video group select-none">
+            <video id="main-video" class="w-full h-full object-contain bg-black" playsinline crossorigin="anonymous"
+                   poster="https://placehold.co/1280x720/06070a/6366f1?text=CineSync+P2P+Theater"></video>
+
+            <div id="reaction-layer" class="absolute inset-0 pointer-events-none overflow-hidden"></div>
+
+            <div id="stream-mode-badge" class="hidden absolute top-4 left-4 bg-rose-600/90 backdrop-blur-md text-white text-xs font-semibold px-3 py-1.5 rounded-full flex items-center gap-2 shadow-lg z-20">
+                <span class="w-2 h-2 rounded-full bg-white animate-ping"></span>
+                <span id="stream-mode-label">LIVE P2P STREAM</span>
+                <button id="stop-stream-btn" onclick="stopActiveBroadcast(true)" class="ml-2 underline hover:text-rose-200">Stop</button>
+            </div>
+
+            <button id="center-play-btn" onclick="togglePlayPause()" class="absolute inset-0 m-auto w-16 h-16 rounded-full bg-indigo-600/90 hover:bg-indigo-500 text-white flex items-center justify-center text-2xl shadow-2xl transition hover:scale-110 z-10">
+                <i class="fa-solid fa-play ml-1"></i>
+            </button>
+
+            <div class="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/95 via-black/75 to-transparent pt-10 pb-3 px-4 z-20">
+                <div class="flex items-center gap-3 mb-2">
+                    <span id="current-time" class="text-[11px] font-mono text-slate-300 w-11 text-right">00:00</span>
+                    <input type="range" id="seek-bar" min="0" max="100" value="0" step="0.1" oninput="handleSeekInput(this.value)" class="flex-1 cursor-pointer">
+                    <span id="duration-time" class="text-[11px] font-mono text-slate-400 w-11">00:00</span>
+                </div>
+
+                <div class="flex items-center justify-between gap-2">
+                    <div class="flex items-center gap-2.5">
+                        <button onclick="togglePlayPause()" class="text-white hover:text-indigo-400 transition p-1.5">
+                            <i id="play-pause-icon" class="fa-solid fa-play text-lg"></i>
+                        </button>
+                        <button onclick="skipSeconds(-10)" class="text-slate-300 hover:text-white p-1.5 text-sm">
+                            <i class="fa-solid fa-rotate-left"></i>
+                        </button>
+                        <button onclick="skipSeconds(10)" class="text-slate-300 hover:text-white p-1.5 text-sm">
+                            <i class="fa-solid fa-rotate-right"></i>
+                        </button>
+
+                        <div class="flex items-center gap-2">
+                            <button onclick="toggleMuteVideo()" class="text-slate-300 hover:text-white p-1.5">
+                                <i id="volume-icon" class="fa-solid fa-volume-high text-sm"></i>
+                            </button>
+                            <input type="range" id="volume-slider" min="0" max="1" step="0.05" value="1" oninput="changeVolume(this.value)" class="w-16 sm:w-20">
+                        </div>
+                    </div>
+
+                    <div class="hidden md:flex items-center gap-1 bg-white/10 backdrop-blur-md px-2 py-1 rounded-full border border-white/10">
+                        <button onclick="sendReaction('🔥')" class="hover:scale-125 transition px-1.5 text-base">🔥</button>
+                        <button onclick="sendReaction('😂')" class="hover:scale-125 transition px-1.5 text-base">😂</button>
+                        <button onclick="sendReaction('😱')" class="hover:scale-125 transition px-1.5 text-base">😱</button>
+                        <button onclick="sendReaction('❤️')" class="hover:scale-125 transition px-1.5 text-base">❤️</button>
+                        <button onclick="sendReaction('🍿')" class="hover:scale-125 transition px-1.5 text-base">🍿</button>
+                    </div>
+
+                    <div class="flex items-center gap-2">
+                        <button onclick="broadcastSyncState('sync')" class="text-xs bg-white/10 hover:bg-white/20 text-slate-200 px-2.5 py-1.5 rounded-lg transition">
+                            <i class="fa-solid fa-arrows-rotate text-indigo-400"></i>
+                            <span class="hidden sm:inline">Sync All</span>
+                        </button>
+                        <button onclick="toggleFullscreen()" class="text-slate-200 hover:text-white p-1.5">
+                            <i class="fa-solid fa-expand text-base"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <section class="bg-cinema-900 border border-slate-800/90 rounded-2xl p-3.5 shadow-xl">
+            <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+                <div class="flex items-center gap-2">
+                    <i class="fa-solid fa-video text-indigo-400"></i>
+                    <h2 class="text-sm font-semibold text-slate-200">Live P2P Video & Voice Call</h2>
+                    <span id="call-status-badge" class="text-[11px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">Mic/Cam Off</span>
+                </div>
+
+                <div class="flex items-center gap-2 flex-wrap">
+                    <button id="btn-toggle-cam" onclick="toggleCameraAndMic()" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3 py-1.5 rounded-xl transition flex items-center gap-1.5">
+                        <i id="cam-btn-icon" class="fa-solid fa-video"></i>
+                        <span id="cam-btn-text">Start Camera & Mic</span>
+                    </button>
+                    <button id="btn-toggle-mic" onclick="toggleMicMute()" disabled class="disabled:opacity-40 disabled:cursor-not-allowed bg-cinema-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-medium px-3 py-1.5 rounded-xl transition">
+                        <i id="mic-btn-icon" class="fa-solid fa-microphone"></i>
+                        <span id="mic-btn-text">Mute</span>
+                    </button>
+                    <button id="btn-end-call" onclick="stopLocalCall()" class="hidden bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold px-3 py-1.5 rounded-xl transition">
+                        <i class="fa-solid fa-phone-slash"></i>
+                        <span>Leave Call</span>
+                    </button>
+                </div>
+            </div>
+
+            <div id="video-call-grid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                <div id="local-video-card" class="relative bg-cinema-950 border border-slate-800 rounded-xl overflow-hidden aspect-video flex items-center justify-center">
+                    <video id="local-webcam-video" autoplay muted playsinline class="hidden w-full h-full object-cover mirror-video"></video>
+                    <div id="local-webcam-placeholder" class="flex flex-col items-center justify-center text-center p-3">
+                        <div class="w-11 h-11 rounded-full bg-indigo-600/20 border border-indigo-500/40 text-indigo-400 flex items-center justify-center font-bold text-sm mb-1.5">YOU</div>
+                        <span class="text-[11px] text-slate-400">Camera Standby</span>
+                    </div>
+                    <div class="absolute bottom-2 left-2 bg-black/75 backdrop-blur-md px-2.5 py-1 rounded-lg text-[11px] font-medium text-white flex items-center gap-1.5">
+                        <span id="local-mic-indicator" class="w-2 h-2 rounded-full bg-slate-500"></span>
+                        <span id="local-tile-name">You</span>
+                    </div>
+                </div>
+
+                <div id="waiting-peers-card" class="bg-cinema-950/60 border border-dashed border-slate-800 rounded-xl aspect-video flex flex-col items-center justify-center text-center p-4">
+                    <i class="fa-solid fa-user-plus text-slate-600 text-xl mb-1.5"></i>
+                    <p class="text-xs font-medium text-slate-400">Waiting for friends...</p>
+                    <p class="text-[10px] text-slate-500 mt-0.5">Share your Invite Link</p>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <aside class="lg:col-span-4 xl:col-span-3 bg-cinema-900 border border-slate-800/90 rounded-2xl flex flex-col h-[560px] lg:h-[calc(100vh-115px)] lg:sticky lg:top-20 shadow-xl overflow-hidden">
+        <div class="grid grid-cols-2 border-b border-slate-800 bg-cinema-950/60 p-1.5 gap-1.5">
+            <button id="tab-btn-chat" onclick="switchSidebarTab('chat')" class="bg-indigo-600 text-white text-xs font-semibold py-2 rounded-xl transition flex items-center justify-center gap-1.5">
+                <i class="fa-solid fa-comments"></i>
+                <span>Room Chat</span>
+            </button>
+            <button id="tab-btn-files" onclick="switchSidebarTab('files')" class="text-slate-400 hover:text-white hover:bg-cinema-800 text-xs font-semibold py-2 rounded-xl transition flex items-center justify-center gap-1.5 relative">
+                <i class="fa-solid fa-folder-arrow-up"></i>
+                <span>P2P Files</span>
+                <span id="file-badge-dot" class="hidden w-2 h-2 rounded-full bg-emerald-400"></span>
+            </button>
+        </div>
+
+        <div id="sidebar-panel-chat" class="flex-1 flex flex-col overflow-hidden">
+            <div id="chat-messages" class="flex-1 overflow-y-auto p-3.5 space-y-3 text-sm">
+                <div class="text-center my-1">
+                    <span class="inline-block bg-cinema-800 border border-slate-700/60 text-slate-400 text-[11px] px-3 py-1 rounded-full">
+                        🔒 Direct WebRTC P2P Chat & Sync Ready
+                    </span>
+                </div>
+            </div>
+
+            <div class="px-3 py-2 border-t border-slate-800/80 bg-cinema-950/60 flex items-center justify-between">
+                <span class="text-[11px] text-slate-500 font-medium">React:</span>
+                <div class="flex items-center gap-1">
+                    <button onclick="sendReaction('🔥')" class="hover:scale-125 transition text-base p-1">🔥</button>
+                    <button onclick="sendReaction('😂')" class="hover:scale-125 transition text-base p-1">😂</button>
+                    <button onclick="sendReaction('😱')" class="hover:scale-125 transition text-base p-1">😱</button>
+                    <button onclick="sendReaction('❤️')" class="hover:scale-125 transition text-base p-1">❤️</button>
+                    <button onclick="sendReaction('👏')" class="hover:scale-125 transition text-base p-1">👏</button>
+                    <button onclick="sendReaction('🍿')" class="hover:scale-125 transition text-base p-1">🍿</button>
+                </div>
+            </div>
+
+            <form onsubmit="handleChatSubmit(event)" class="p-3 border-t border-slate-800 bg-cinema-900 flex items-center gap-2">
+                <input type="text" id="chat-input" placeholder="Send message to room..." autocomplete="off"
+                       class="flex-1 bg-cinema-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+                <button type="submit" class="bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white w-10 h-10 rounded-xl flex items-center justify-center transition">
+                    <i class="fa-solid fa-paper-plane text-sm"></i>
+                </button>
+            </form>
+        </div>
+
+        <div id="sidebar-panel-files" class="hidden flex-1 flex flex-col overflow-hidden p-3.5 gap-3">
+            <div id="file-dropzone" onclick="document.getElementById('p2p-file-input').click()" class="border-2 border-dashed border-slate-700 hover:border-indigo-500 bg-cinema-950/70 rounded-2xl p-4 text-center cursor-pointer transition">
+                <div class="w-10 h-10 rounded-xl bg-indigo-500/15 text-indigo-400 flex items-center justify-center mx-auto mb-2">
+                    <i class="fa-solid fa-cloud-arrow-up text-lg"></i>
+                </div>
+                <p class="text-xs font-semibold text-slate-200">Click or Drop File to Send P2P</p>
+                <p class="text-[11px] text-slate-500 mt-1">Videos, images and subtitles shared directly browser-to-browser.</p>
+                <input type="file" id="p2p-file-input" class="hidden" onchange="handleP2PFileSelect(event)">
+            </div>
+
+            <div id="file-transfer-progress-box" class="hidden bg-cinema-800 border border-slate-700 rounded-xl p-3 space-y-1.5">
+                <div class="flex items-center justify-between text-xs">
+                    <span id="transfer-filename" class="font-medium text-slate-200 truncate max-w-[180px]">file.srt</span>
+                    <span id="transfer-percent" class="font-mono text-indigo-400">0%</span>
+                </div>
+                <div class="w-full bg-cinema-950 rounded-full h-2 overflow-hidden">
+                    <div id="transfer-bar" class="bg-indigo-500 h-full transition-all duration-150" style="width:0%"></div>
+                </div>
+            </div>
+
+            <div class="flex-1 overflow-y-auto space-y-2" id="shared-files-list">
+                <p id="no-files-msg" class="text-center text-xs text-slate-500 py-6">No files shared in this session yet.</p>
+            </div>
+        </div>
+    </aside>
+</main>
+
+<div id="join-modal" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-cinema-900 border border-slate-700 rounded-2xl max-w-md w-full p-5 shadow-2xl">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+            <h3 class="font-bold text-base text-white flex items-center gap-2">
+                <i class="fa-solid fa-right-to-bracket text-indigo-400"></i>
+                Join a Friend's Room
+            </h3>
+            <button onclick="toggleJoinModal(false)" class="text-slate-400 hover:text-white p-1">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+
+        <p class="text-xs text-slate-400 mb-3">
+            Paste your friend's Room Code or full invite URL:
+        </p>
+        <input type="text" id="manual-room-input" placeholder="CINE-XXXX or invite link..."
+               class="w-full bg-cinema-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 mb-4">
+
+        <div class="flex justify-end gap-2">
+            <button onclick="toggleJoinModal(false)" class="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium px-4 py-2 rounded-xl transition">Cancel</button>
+            <button onclick="joinManualRoom()" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-4 py-2 rounded-xl transition">Connect P2P</button>
+        </div>
+    </div>
+</div>
+
+<script>
+const PEER_CONFIG = {
+    debug: 1,
+    config: {
+        iceServers: [
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls: "stun:stun1.l.google.com:19302" },
+            { urls: "stun:stun2.l.google.com:19302" }
+        ]
+    }
+};
+
+let peer = null;
+let myPeerId = "";
+let roomId = "";
+let isHost = false;
+let myUsername = "Host";
+
+const dataConnections = new Map();
+const peerNames = new Map();
+const camCalls = new Map();
+const theaterCalls = new Map();
+
+let localCamStream = null;
+let activeBroadcastStream = null;
+let isMicMuted = false;
+let isRemoteSyncing = false;
+
+const incomingFiles = new Map();
+
+const mainVideo = document.getElementById("main-video");
+const playPauseIcon = document.getElementById("play-pause-icon");
+const centerPlayBtn = document.getElementById("center-play-btn");
+const seekBar = document.getElementById("seek-bar");
+const currentTimeEl = document.getElementById("current-time");
+const durationTimeEl = document.getElementById("duration-time");
+
+window.addEventListener("DOMContentLoaded", () => {
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    const queryParams = new URLSearchParams(window.location.search);
+    const targetRoom = (hashParams.get("room") || queryParams.get("room") || "").trim().toUpperCase();
+
+    if (targetRoom.startsWith("CINE-")) {
+        roomId = targetRoom;
+        isHost = false;
+        myUsername = "Friend-" + Math.floor(100 + Math.random() * 900);
+        document.getElementById("username-input").value = myUsername;
+        document.getElementById("local-tile-name").textContent = myUsername + " (You)";
+        initPeerAsGuest(roomId);
+    } else {
+        roomId = "CINE-" + Math.random().toString(36).substring(2, 6).toUpperCase();
+        isHost = true;
+        myUsername = "Host";
+        window.history.replaceState(null, "", "#room=" + roomId);
+        document.getElementById("local-tile-name").textContent = "Host (You)";
+        initPeerAsHost(roomId);
+    }
+
+    document.getElementById("room-id-display").textContent = roomId;
+    setupFileDragAndDrop();
+});
+
+function initPeerAsHost(hostId) {
+    setConnectionStatus("hosting", "Hosting Room • Waiting for Friends");
+    peer = new Peer(hostId, PEER_CONFIG);
+
+    peer.on("open", id => {
+        myPeerId = id;
+        appendSystemMessage(`🎬 Room <strong>${roomId}</strong> is live!`);
+    });
+
+    peer.on("connection", setupDataConnection);
+    peer.on("call", handleIncomingMediaCall);
+
+    peer.on("error", err => {
+        if (err.type === "unavailable-id") {
+            isHost = false;
+            myUsername = "Friend-" + Math.floor(100 + Math.random() * 900);
+            document.getElementById("username-input").value = myUsername;
+            initPeerAsGuest(hostId);
+        } else {
+            showToast("P2P Notice: " + err.message, "warning");
+        }
+    });
+}
+
+function initPeerAsGuest(hostId) {
+    setConnectionStatus("connecting", "Connecting to " + hostId + "...");
+    peer = new Peer(undefined, PEER_CONFIG);
+
+    peer.on("open", id => {
+        myPeerId = id;
+        setupDataConnection(peer.connect(hostId, { reliable: true }));
+    });
+
+    peer.on("connection", setupDataConnection);
+    peer.on("call", handleIncomingMediaCall);
+
+    peer.on("error", err => {
+        setConnectionStatus("error", "Connection Error");
+        showToast("Could not reach room " + hostId + ": " + err.message, "error");
+    });
+}
+
+function setupDataConnection(conn) {
+    conn.on("open", () => {
+        dataConnections.set(conn.peer, conn);
+        updatePeerCountUI();
+        setConnectionStatus("connected", `Connected (${dataConnections.size + 1} in Room)`);
+
+        conn.send({
+            type: "hello",
+            username: myUsername,
+            peerId: myPeerId,
+            knownPeers: Array.from(dataConnections.keys())
+        });
+
+        if (activeBroadcastStream) callPeerWithStream(conn.peer, activeBroadcastStream, "theater");
+        if (localCamStream) callPeerWithStream(conn.peer, localCamStream, "webcam");
+
+        if (!activeBroadcastStream && mainVideo.src && !mainVideo.src.startsWith("blob:")) {
+            conn.send({
+                type: "video-sync",
+                action: mainVideo.paused ? "pause" : "play",
+                src: mainVideo.src,
+                currentTime: mainVideo.currentTime
+            });
+        }
+    });
+
+    conn.on("data", data => handlePeerData(conn.peer, data));
+
+    conn.on("close", () => {
+        const leftName = peerNames.get(conn.peer) || "A friend";
+        dataConnections.delete(conn.peer);
+        peerNames.delete(conn.peer);
+        removeRemoteVideoTile(conn.peer);
+        updatePeerCountUI();
+        appendSystemMessage(`👋 <strong>${escapeHTML(leftName)}</strong> left the room.`);
+    });
+}
+
+function handlePeerData(senderId, data) {
+    switch (data.type) {
+        case "hello":
+            peerNames.set(senderId, data.username || "Friend");
+            appendSystemMessage(`🎉 <strong>${escapeHTML(data.username)}</strong> joined the watch party!`);
+            showToast(`${data.username} joined the room!`, "success");
+
+            if (Array.isArray(data.knownPeers)) {
+                data.knownPeers.forEach(otherId => {
+                    if (otherId !== myPeerId && !dataConnections.has(otherId)) {
+                        setupDataConnection(peer.connect(otherId, { reliable: true }));
+                    }
+                });
+            }
+            break;
+
+        case "name-change":
+            peerNames.set(senderId, data.username);
+            const label = document.getElementById(`tile-name-${senderId}`);
+            if (label) label.textContent = data.username;
+            break;
+
+        case "chat":
+            renderChatMessage(data.username, data.text, data.time, false);
+            break;
+
+        case "reaction":
+            spawnFloatingEmoji(data.emoji);
+            break;
+
+        case "video-sync":
+            applyRemoteVideoSync(data);
+            break;
+
+        case "stream-stopped":
+            if (mainVideo.srcObject) {
+                mainVideo.srcObject = null;
+                document.getElementById("stream-mode-badge").classList.add("hidden");
+                showToast("Host ended the live stream.", "info");
+            }
+            break;
+
+        case "file-meta":
+            incomingFiles.set(data.fileId, {
+                name: data.name,
+                size: data.size,
+                mime: data.mime,
+                sender: data.sender,
+                totalChunks: data.totalChunks,
+                receivedChunks: 0,
+                chunks: new Array(data.totalChunks)
+            });
+            showToast(`Receiving "${data.name}" from ${data.sender}...`, "info");
+            break;
+
+        case "file-chunk":
+            handleIncomingFileChunk(data);
+            break;
+    }
+}
+
+function broadcastData(payload) {
+    dataConnections.forEach(conn => {
+        if (conn.open) conn.send(payload);
+    });
+}
+
+function callPeerWithStream(targetPeerId, stream, streamType) {
+    const call = peer.call(targetPeerId, stream, { metadata: { streamType } });
+
+    if (streamType === "webcam") {
+        camCalls.set(targetPeerId, call);
+        call.on("stream", remoteStream => attachRemoteWebcamStream(targetPeerId, remoteStream));
+        call.on("close", () => removeRemoteVideoTile(targetPeerId));
+    } else {
+        theaterCalls.set(targetPeerId, call);
+    }
+}
+
+function handleIncomingMediaCall(call) {
+    const streamType = call.metadata?.streamType || "webcam";
+
+    if (streamType === "theater") {
+        call.answer();
+        call.on("stream", remoteStream => {
+            mainVideo.srcObject = remoteStream;
+            mainVideo.play().catch(() => {
+                showToast("Click the video player to start the stream.", "info");
+            });
+            document.getElementById("stream-mode-badge").classList.remove("hidden");
+            document.getElementById("stream-mode-label").textContent = "WATCHING LIVE P2P STREAM";
+            document.getElementById("stop-stream-btn").classList.add("hidden");
+            durationTimeEl.textContent = "LIVE";
+            currentTimeEl.textContent = "LIVE";
+            seekBar.value = 100;
+        });
+        call.on("close", () => {
+            mainVideo.srcObject = null;
+            document.getElementById("stream-mode-badge").classList.add("hidden");
+        });
+    } else {
+        call.answer(localCamStream || undefined);
+        camCalls.set(call.peer, call);
+        call.on("stream", remoteStream => attachRemoteWebcamStream(call.peer, remoteStream));
+        call.on("close", () => removeRemoteVideoTile(call.peer));
+    }
+}
+
+async function startScreenShare() {
+    try {
+        if (!navigator.mediaDevices?.getDisplayMedia) {
+            showToast("Screen sharing is not supported in this browser.", "error");
+            return;
+        }
+
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+            video: { cursor: "always" },
+            audio: true
+        });
+
+        stopActiveBroadcast(false);
+        activeBroadcastStream = stream;
+        mainVideo.srcObject = stream;
+        mainVideo.muted = true;
+        mainVideo.play();
+
+        document.getElementById("stream-mode-badge").classList.remove("hidden");
+        document.getElementById("stream-mode-label").textContent = "SHARING YOUR SCREEN LIVE";
+        document.getElementById("stop-stream-btn").classList.remove("hidden");
+        durationTimeEl.textContent = "LIVE";
+        currentTimeEl.textContent = "LIVE";
+        seekBar.value = 100;
+
+        dataConnections.forEach((_, peerId) => {
+            callPeerWithStream(peerId, stream, "theater");
+        });
+
+        stream.getVideoTracks()[0].onended = () => stopActiveBroadcast(true);
+        showToast("Screen sharing live to all connected friends!", "success");
+    } catch (err) {
+        if (err.name !== "NotAllowedError") {
+            showToast("Screen share error: " + err.message, "error");
+        }
+    }
+}
+
+function handleLocalMovieSelect(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    stopActiveBroadcast(false);
+    const fileURL = URL.createObjectURL(file);
+    mainVideo.srcObject = null;
+    mainVideo.src = fileURL;
+    mainVideo.muted = false;
+
+    mainVideo.onloadedmetadata = () => {
+        mainVideo.play().then(() => {
+            const captureFn = mainVideo.captureStream || mainVideo.mozCaptureStream;
+            if (captureFn) {
+                activeBroadcastStream = captureFn.call(mainVideo);
+                document.getElementById("stream-mode-badge").classList.remove("hidden");
+                document.getElementById("stream-mode-label").textContent = `STREAMING: ${file.name}`;
+                document.getElementById("stop-stream-btn").classList.remove("hidden");
+
+                dataConnections.forEach((_, peerId) => {
+                    callPeerWithStream(peerId, activeBroadcastStream, "theater");
+                });
+                showToast(`Streaming "${file.name}" live to friends!`, "success");
+            } else {
+                showToast(`Loaded "${file.name}". Playback sync active.`, "info");
+            }
+        }).catch(() => {
+            showToast("Press Play to begin streaming the movie.", "info");
+        });
+    };
+}
+
+function stopActiveBroadcast(notifyPeers = true) {
+    if (activeBroadcastStream) {
+        activeBroadcastStream.getTracks().forEach(track => track.stop());
+        activeBroadcastStream = null;
+    }
+
+    theaterCalls.forEach(call => call.close());
+    theaterCalls.clear();
+
+    if (mainVideo.srcObject) mainVideo.srcObject = null;
+    mainVideo.muted = false;
+    document.getElementById("stream-mode-badge").classList.add("hidden");
+
+    if (notifyPeers) {
+        broadcastData({ type: "stream-stopped" });
+        showToast("Live broadcast stopped.", "info");
+    }
+}
+
+function toggleUrlBar() {
+    document.getElementById("url-input-bar").classList.toggle("hidden");
+}
+
+function loadDirectUrl(broadcast = true) {
+    const url = document.getElementById("video-url-field").value.trim();
+    if (!url) {
+        showToast("Enter a valid direct .mp4 or .webm URL.", "warning");
+        return;
+    }
+
+    stopActiveBroadcast(false);
+    mainVideo.srcObject = null;
+    mainVideo.src = url;
+    mainVideo.play().catch(() => {});
+    document.getElementById("url-input-bar").classList.add("hidden");
+
+    if (broadcast) {
+        broadcastData({
+            type: "video-sync",
+            action: "load-url",
+            src: url,
+            currentTime: 0
+        });
+    }
+}
+
+function loadSampleMovie(broadcast = true) {
+    const sampleUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4";
+    document.getElementById("video-url-field").value = sampleUrl;
+    loadDirectUrl(broadcast);
+}
+
+function togglePlayPause() {
+    if (mainVideo.paused) {
+        mainVideo.play().catch(() => showToast("Load a movie or share screen first.", "warning"));
+    } else {
+        mainVideo.pause();
+    }
+}
+
+mainVideo.addEventListener("play", () => {
+    playPauseIcon.className = "fa-solid fa-pause text-lg";
+    centerPlayBtn.classList.add("hidden");
+    if (!isRemoteSyncing && !activeBroadcastStream) broadcastSyncState("play");
+});
+
+mainVideo.addEventListener("pause", () => {
+    playPauseIcon.className = "fa-solid fa-play text-lg";
+    centerPlayBtn.classList.remove("hidden");
+    if (!isRemoteSyncing && !activeBroadcastStream) broadcastSyncState("pause");
+});
+
+mainVideo.addEventListener("timeupdate", () => {
+    if (!mainVideo.srcObject && mainVideo.duration) {
+        seekBar.value = (mainVideo.currentTime / mainVideo.duration) * 100;
+        currentTimeEl.textContent = formatTime(mainVideo.currentTime);
+    }
+});
+
+mainVideo.addEventListener("loadedmetadata", () => {
+    if (!mainVideo.srcObject) durationTimeEl.textContent = formatTime(mainVideo.duration);
+});
+
+function handleSeekInput(percent) {
+    if (mainVideo.srcObject || !mainVideo.duration) return;
+    mainVideo.currentTime = (percent / 100) * mainVideo.duration;
+    broadcastSyncState("seek");
+}
+
+function skipSeconds(delta) {
+    if (mainVideo.srcObject || !mainVideo.duration) return;
+    mainVideo.currentTime = Math.max(0, Math.min(mainVideo.duration, mainVideo.currentTime + delta));
+    broadcastSyncState("seek");
+}
+
+function broadcastSyncState(action) {
+    if (mainVideo.srcObject) return;
+    broadcastData({
+        type: "video-sync",
+        action,
+        src: mainVideo.src,
+        currentTime: mainVideo.currentTime
+    });
+}
+
+function applyRemoteVideoSync(data) {
+    if (mainVideo.srcObject) return;
+    isRemoteSyncing = true;
+
+    if (data.src && mainVideo.src !== data.src && !data.src.startsWith("blob:")) {
+        mainVideo.src = data.src;
+    }
+
+    if (typeof data.currentTime === "number" && Math.abs(mainVideo.currentTime - data.currentTime) > 0.8) {
+        mainVideo.currentTime = data.currentTime;
+    }
+
+    if (data.action === "play" || data.action === "load-url") {
+        mainVideo.play().catch(() => {});
+    } else if (data.action === "pause") {
+        mainVideo.pause();
+    }
+
+    setTimeout(() => { isRemoteSyncing = false; }, 350);
+}
+
+async function toggleCameraAndMic() {
+    const videoEl = document.getElementById("local-webcam-video");
+    const placeholder = document.getElementById("local-webcam-placeholder");
+    const camText = document.getElementById("cam-btn-text");
+
+    if (localCamStream) {
+        const videoTrack = localCamStream.getVideoTracks()[0];
+        if (videoTrack) {
+            videoTrack.enabled = !videoTrack.enabled;
+            videoEl.classList.toggle("hidden", !videoTrack.enabled);
+            placeholder.classList.toggle("hidden", videoTrack.enabled);
+            camText.textContent = videoTrack.enabled ? "Turn Cam Off" : "Turn Cam On";
+        }
+        return;
+    }
+
+    try {
+        localCamStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        videoEl.srcObject = localCamStream;
+        videoEl.classList.remove("hidden");
+        placeholder.classList.add("hidden");
+
+        camText.textContent = "Turn Cam Off";
+        document.getElementById("btn-toggle-mic").disabled = false;
+        document.getElementById("btn-end-call").classList.remove("hidden");
+        document.getElementById("call-status-badge").textContent = "Call Active";
+        document.getElementById("call-status-badge").className =
+            "text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30";
+        document.getElementById("local-mic-indicator").className =
+            "w-2 h-2 rounded-full bg-emerald-400 animate-pulse";
+
+        dataConnections.forEach((_, peerId) => {
+            callPeerWithStream(peerId, localCamStream, "webcam");
+        });
+
+        showToast("Camera & Microphone active!", "success");
+    } catch (err) {
+        showToast("Camera/Mic permission denied or no device found.", "error");
+    }
+}
+
+function toggleMicMute() {
+    if (!localCamStream) return;
+    const audioTrack = localCamStream.getAudioTracks()[0];
+    if (!audioTrack) return;
+
+    isMicMuted = !isMicMuted;
+    audioTrack.enabled = !isMicMuted;
+
+    document.getElementById("mic-btn-icon").className = isMicMuted
+        ? "fa-solid fa-microphone-slash text-rose-400"
+        : "fa-solid fa-microphone text-emerald-400";
+    document.getElementById("mic-btn-text").textContent = isMicMuted ? "Unmute" : "Mute";
+}
+
+function stopLocalCall() {
+    if (localCamStream) {
+        localCamStream.getTracks().forEach(track => track.stop());
+        localCamStream = null;
+    }
+
+    camCalls.forEach(call => call.close());
+    camCalls.clear();
+
+    document.getElementById("local-webcam-video").classList.add("hidden");
+    document.getElementById("local-webcam-placeholder").classList.remove("hidden");
+    document.getElementById("cam-btn-text").textContent = "Start Camera & Mic";
+    document.getElementById("btn-toggle-mic").disabled = true;
+    document.getElementById("btn-end-call").classList.add("hidden");
+    document.getElementById("call-status-badge").textContent = "Mic/Cam Off";
+    document.getElementById("call-status-badge").className =
+        "text-[11px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400";
+    showToast("Left video call.", "info");
+}
+
+function attachRemoteWebcamStream(peerId, stream) {
+    document.getElementById("waiting-peers-card")?.classList.add("hidden");
+
+    const grid = document.getElementById("video-call-grid");
+    let card = document.getElementById(`peer-video-card-${peerId}`);
+    const displayName = peerNames.get(peerId) || "Friend";
+
+    if (!card) {
+        card = document.createElement("div");
+        card.id = `peer-video-card-${peerId}`;
+        card.className =
+            "relative bg-cinema-950 border border-slate-800 rounded-xl overflow-hidden aspect-video flex items-center justify-center";
+        card.innerHTML = `
+            <video id="remote-vid-${peerId}" autoplay playsinline class="w-full h-full object-cover"></video>
+            <div class="absolute bottom-2 left-2 bg-black/75 backdrop-blur-md px-2.5 py-1 rounded-lg text-[11px] font-medium text-white">
+                ${escapeHTML(displayName)}
+            </div>
+        `;
+        grid.appendChild(card);
+    }
+
+    const videoEl = document.getElementById(`remote-vid-${peerId}`);
+    videoEl.srcObject = stream;
+    videoEl.play().catch(() => {});
+}
+
+function removeRemoteVideoTile(peerId) {
+    document.getElementById(`peer-video-card-${peerId}`)?.remove();
+    if (dataConnections.size === 0) {
+        document.getElementById("waiting-peers-card")?.classList.remove("hidden");
+    }
+}
+
+function setupFileDragAndDrop() {
+    const dropzone = document.getElementById("file-dropzone");
+
+    ["dragenter", "dragover"].forEach(evt => {
+        dropzone.addEventListener(evt, e => {
+            e.preventDefault();
+            dropzone.classList.add("border-indigo-500", "bg-indigo-500/10");
+        });
+    });
+
+    ["dragleave", "drop"].forEach(evt => {
+        dropzone.addEventListener(evt, e => {
+            e.preventDefault();
+            dropzone.classList.remove("border-indigo-500", "bg-indigo-500/10");
+        });
+    });
+
+    dropzone.addEventListener("drop", e => {
+        const file = e.dataTransfer.files[0];
+        if (file) sendFileOverP2P(file);
+    });
+}
+
+function handleP2PFileSelect(event) {
+    const file = event.target.files[0];
+    if (file) sendFileOverP2P(file);
+    event.target.value = "";
+}
+
+async function sendFileOverP2P(file) {
+    const CHUNK_SIZE = 16 * 1024;
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+    const fileId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+    const localUrl = URL.createObjectURL(file);
+    addSharedFileItem(file.name, file.size, localUrl, "You");
+
+    if (dataConnections.size === 0) {
+        showToast("File added! Connect a friend to transfer it P2P.", "info");
+        return;
+    }
+
+    broadcastData({
+        type: "file-meta",
+        fileId,
+        name: file.name,
+        size: file.size,
+        mime: file.type || "application/octet-stream",
+        sender: myUsername,
+        totalChunks
+    });
+
+    const progressBox = document.getElementById("file-transfer-progress-box");
+    const progressBar = document.getElementById("transfer-bar");
+    const progressPct = document.getElementById("transfer-percent");
+    document.getElementById("transfer-filename").textContent = `Sending: ${file.name}`;
+    progressBox.classList.remove("hidden");
+
+    const buffer = await file.arrayBuffer();
+
+    for (let i = 0; i < totalChunks; i++) {
+        const chunk = buffer.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+        broadcastData({ type: "file-chunk", fileId, index: i, chunk });
+
+        const pct = Math.round(((i + 1) / totalChunks) * 100);
+        progressBar.style.width = `${pct}%`;
+        progressPct.textContent = `${pct}%`;
+
+        if (i % 10 === 0) await new Promise(resolve => setTimeout(resolve, 5));
+    }
+
+    setTimeout(() => progressBox.classList.add("hidden"), 1200);
+    showToast(`Sent "${file.name}" to all friends!`, "success");
+}
+
+function handleIncomingFileChunk(data) {
+    const record = incomingFiles.get(data.fileId);
+    if (!record) return;
+
+    record.chunks[data.index] = data.chunk;
+    record.receivedChunks++;
+
+    const progressBox = document.getElementById("file-transfer-progress-box");
+    const progressBar = document.getElementById("transfer-bar");
+    const progressPct = document.getElementById("transfer-percent");
+    document.getElementById("transfer-filename").textContent = `Receiving: ${record.name}`;
+    progressBox.classList.remove("hidden");
+
+    const pct = Math.round((record.receivedChunks / record.totalChunks) * 100);
+    progressBar.style.width = `${pct}%`;
+    progressPct.textContent = `${pct}%`;
+
+    if (record.receivedChunks === record.totalChunks) {
+        const blob = new Blob(record.chunks, { type: record.mime });
+        const downloadUrl = URL.createObjectURL(blob);
+        addSharedFileItem(record.name, record.size, downloadUrl, record.sender);
+        incomingFiles.delete(data.fileId);
+
+        document.getElementById("file-badge-dot").classList.remove("hidden");
+        setTimeout(() => progressBox.classList.add("hidden"), 1200);
+        showToast(`File received: "${record.name}"!`, "success");
+    }
+}
+
+function addSharedFileItem(name, size, url, sender) {
+    document.getElementById("no-files-msg")?.remove();
+
+    const sizeLabel = size < 1024 * 1024
+        ? `${(size / 1024).toFixed(1)} KB`
+        : `${(size / (1024 * 1024)).toFixed(2)} MB`;
+
+    const item = document.createElement("div");
+    item.className =
+        "bg-cinema-800 border border-slate-700/70 rounded-xl p-2.5 flex items-center justify-between gap-2";
+    item.innerHTML = `
+        <div class="min-w-0 flex-1">
+            <p class="text-xs font-semibold text-slate-200 truncate">${escapeHTML(name)}</p>
+            <p class="text-[10px] text-slate-400">${sizeLabel} • From ${escapeHTML(sender)}</p>
+        </div>
+        <a href="${url}" download="${escapeHTML(name)}"
+           class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition shrink-0">
+            <i class="fa-solid fa-download"></i> Save
+        </a>
+    `;
+    document.getElementById("shared-files-list").prepend(item);
+}
+
+function handleChatSubmit(event) {
+    event.preventDefault();
+    const input = document.getElementById("chat-input");
+    const text = input.value.trim();
+    if (!text) return;
+
+    const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    renderChatMessage(myUsername, text, time, true);
+    broadcastData({ type: "chat", username: myUsername, text, time });
+    input.value = "";
+}
+
+function renderChatMessage(sender, text, time, isSelf) {
+    const feed = document.getElementById("chat-messages");
+    const wrapper = document.createElement("div");
+    wrapper.className = `flex flex-col ${isSelf ? "items-end" : "items-start"}`;
+    wrapper.innerHTML = `
+        <div class="flex items-baseline gap-2 mb-1">
+            <span class="text-xs font-semibold ${isSelf ? "text-indigo-400" : "text-pink-400"}">${escapeHTML(sender)}</span>
+            <span class="text-[10px] text-slate-500">${escapeHTML(time)}</span>
+        </div>
+        <div class="${isSelf
+            ? "bg-indigo-600 text-white rounded-tr-sm"
+            : "bg-cinema-800 border border-slate-700/60 text-slate-200 rounded-tl-sm"} px-3.5 py-2 rounded-2xl max-w-[85%] break-words">
+            ${escapeHTML(text)}
+        </div>
+    `;
+    feed.appendChild(wrapper);
+    feed.scrollTop = feed.scrollHeight;
+}
+
+function appendSystemMessage(html) {
+    const feed = document.getElementById("chat-messages");
+    const div = document.createElement("div");
+    div.className = "text-center my-1";
+    div.innerHTML =
+        `<span class="inline-block bg-cinema-800/80 text-slate-400 text-[11px] px-2.5 py-0.5 rounded-full">${html}</span>`;
+    feed.appendChild(div);
+    feed.scrollTop = feed.scrollHeight;
+}
+
+function sendReaction(emoji) {
+    spawnFloatingEmoji(emoji);
+    broadcastData({ type: "reaction", emoji });
+}
+
+function spawnFloatingEmoji(emoji) {
+    const el = document.createElement("div");
+    el.className = "floating-emoji text-3xl sm:text-4xl";
+    el.textContent = emoji;
+    el.style.left = `${Math.floor(Math.random() * 70) + 15}%`;
+    document.getElementById("reaction-layer").appendChild(el);
+    setTimeout(() => el.remove(), 2600);
+}
+
+function switchSidebarTab(tab) {
+    const isChat = tab === "chat";
+
+    document.getElementById("sidebar-panel-chat").classList.toggle("hidden", !isChat);
+    document.getElementById("sidebar-panel-files").classList.toggle("hidden", isChat);
+
+    document.getElementById("tab-btn-chat").className = isChat
+        ? "bg-indigo-600 text-white text-xs font-semibold py-2 rounded-xl transition flex items-center justify-center gap-1.5"
+        : "text-slate-400 hover:text-white hover:bg-cinema-800 text-xs font-semibold py-2 rounded-xl transition flex items-center justify-center gap-1.5";
+
+    document.getElementById("tab-btn-files").className = !isChat
+        ? "bg-indigo-600 text-white text-xs font-semibold py-2 rounded-xl transition flex items-center justify-center gap-1.5"
+        : "text-slate-400 hover:text-white hover:bg-cinema-800 text-xs font-semibold py-2 rounded-xl transition flex items-center justify-center gap-1.5";
+}
+
+function copyInviteLink() {
+    const baseUrl = window.location.href.split("#")[0].split("?")[0];
+    const inviteUrl = `${baseUrl}#room=${roomId}`;
+
+    navigator.clipboard?.writeText(inviteUrl).then(
+        () => showToast("Invite link copied!", "success"),
+        () => showToast(`Room ID: ${roomId}`, "info")
+    );
+}
+
+function toggleJoinModal(show) {
+    document.getElementById("join-modal").classList.toggle("hidden", !show);
+}
+
+function joinManualRoom() {
+    const raw = document.getElementById("manual-room-input").value.trim();
+    if (!raw) return;
+
+    const match = raw.toUpperCase().match(/CINE-[A-Z0-9]+/);
+    const extractedId = match ? match[0] : raw.toUpperCase();
+    window.location.hash = `room=${extractedId}`;
+    window.location.reload();
+}
+
+function updateUsername() {
+    const val = document.getElementById("username-input").value.trim();
+    if (!val) return;
+    myUsername = val;
+    document.getElementById("local-tile-name").textContent = `${myUsername} (You)`;
+    broadcastData({ type: "name-change", username: myUsername });
+}
+
+function setConnectionStatus(state, text) {
+    const badge = document.getElementById("connection-badge");
+    const dot = document.getElementById("connection-dot");
+    document.getElementById("connection-text").textContent = text;
+
+    if (state === "connected") {
+        badge.className =
+            "px-2.5 py-0.5 text-[11px] font-semibold rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 flex items-center gap-1.5";
+        dot.className = "w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse";
+    } else if (state === "hosting") {
+        badge.className =
+            "px-2.5 py-0.5 text-[11px] font-semibold rounded-full bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 flex items-center gap-1.5";
+        dot.className = "w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse";
+    } else if (state === "error") {
+        badge.className =
+            "px-2.5 py-0.5 text-[11px] font-semibold rounded-full bg-rose-500/15 text-rose-300 border border-rose-500/30 flex items-center gap-1.5";
+        dot.className = "w-1.5 h-1.5 rounded-full bg-rose-400";
+    }
+}
+
+function updatePeerCountUI() {
+    document.getElementById("peer-count-text").textContent =
+        `${dataConnections.size + 1} in Room`;
+}
+
+function changeVolume(val) {
+    mainVideo.volume = val;
+    mainVideo.muted = val == 0;
+}
+
+function toggleMuteVideo() {
+    mainVideo.muted = !mainVideo.muted;
+    document.getElementById("volume-slider").value = mainVideo.muted ? 0 : (mainVideo.volume || 1);
+    document.getElementById("volume-icon").className = mainVideo.muted
+        ? "fa-solid fa-volume-xmark text-rose-400 text-sm"
+        : "fa-solid fa-volume-high text-sm";
+}
+
+function toggleFullscreen() {
+    const wrapper = document.getElementById("theater-wrapper");
+    if (!document.fullscreenElement) {
+        wrapper.requestFullscreen().catch(() => {});
+    } else {
+        document.exitFullscreen();
+    }
+}
+
+function formatTime(sec) {
+    if (!isFinite(sec) || isNaN(sec)) return "00:00";
+    const minutes = Math.floor(sec / 60);
+    const seconds = Math.floor(sec % 60);
+    return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function showToast(message, type = "info") {
+    const container = document.getElementById("toast-container");
+    const toast = document.createElement("div");
+
+    const styles = {
+        info: "bg-cinema-800 border-indigo-500/50 text-slate-100",
+        success: "bg-emerald-950/95 border-emerald-500/50 text-emerald-200",
+        warning: "bg-amber-950/95 border-amber-500/50 text-amber-200",
+        error: "bg-rose-950/95 border-rose-500/50 text-rose-200"
+    };
+
+    toast.className =
+        `pointer-events-auto border backdrop-blur-md px-4 py-2.5 rounded-xl shadow-xl text-xs font-medium flex items-center gap-2 ${styles[type] || styles.info}`;
+    toast.innerHTML =
+        `<i class="fa-solid fa-circle-info text-indigo-400"></i><span>${escapeHTML(message)}</span>`;
+    container.appendChild(toast);
+
+    setTimeout(() => {
+        toast.style.opacity = "0";
+        setTimeout(() => toast.remove(), 300);
+    }, 3200);
+}
+
+function escapeHTML(str) {
+    return String(str).replace(/[&<>"']/g, character => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        "\"": "&quot;",
+        "'": "&#39;"
+    }[character]));
+}
+</script>
+</body>
+</html>
